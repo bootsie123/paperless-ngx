@@ -3,6 +3,8 @@ from urllib.parse import quote
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.core import context
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+from django.contrib.auth.models import Group
+from django.db.models.functions import Lower
 from django.conf import settings
 from django.forms import ValidationError
 from django.urls import reverse
@@ -61,7 +63,6 @@ class CustomAccountAdapter(DefaultAccountAdapter):
             path = path.replace("UID-KEY", quote(key))
             return settings.PAPERLESS_URL + path
 
-
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     def is_open_for_signup(self, request, sociallogin):
         """
@@ -87,3 +88,34 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         """
         # TODO: If default global permissions are implemented, should also be here
         return super().populate_user(request, sociallogin, data)  # pragma: no cover
+
+    def pre_social_login(self, request, sociallogin):
+        if not sociallogin.user.id == None:
+            sync_groups(sociallogin)
+
+    def save_user(self, request, sociallogin, form=None):
+        user = super().save_user(request, sociallogin, form)
+
+        sync_groups(sociallogin)
+
+        return user
+    
+def sync_groups(sociallogin):
+    user = sociallogin.user
+
+    sso_groups = sociallogin.account.extra_data["groups"]
+    user_groups = user.groups.all()
+
+    for group in user_groups:
+        if not group.name in sso_groups:
+            user.groups.remove(group)
+        else:
+            sso_groups.remove(group.name)
+
+    for group in sso_groups:
+        found_group = Group.objects.filter(name=group).first()
+
+        if found_group and group == found_group.name:
+            user.groups.add(found_group)
+
+    user.save()
